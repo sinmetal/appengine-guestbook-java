@@ -6,10 +6,15 @@
 <%@ page import="com.google.appengine.api.datastore.Key" %>
 <%@ page import="com.google.appengine.api.datastore.KeyFactory" %>
 <%@ page import="com.google.appengine.api.datastore.Query" %>
+<%@ page import="com.google.appengine.api.memcache.MemcacheService" %>
+<%@ page import="com.google.appengine.api.memcache.MemcacheServiceFactory" %>
 <%@ page import="com.google.appengine.api.users.User" %>
 <%@ page import="com.google.appengine.api.users.UserService" %>
 <%@ page import="com.google.appengine.api.users.UserServiceFactory" %>
 <%@ page import="java.util.List" %>
+<%@ page import="java.util.ArrayList" %>
+<%@ page import="java.util.Map" %>
+<%@ page import="java.util.Map.Entry" %>
 <%@ taglib prefix="fn" uri="http://java.sun.com/jsp/jstl/functions" %>
 
 <html>
@@ -44,11 +49,45 @@
 
 <%
     DatastoreService datastore = DatastoreServiceFactory.getDatastoreService();
+	MemcacheService memcacheService = MemcacheServiceFactory.getMemcacheService();
     Key guestbookKey = KeyFactory.createKey("Guestbook", guestbookName);
-    // Run an ancestor query to ensure we see the most up-to-date
-    // view of the Greetings belonging to the selected Guestbook.
-    Query query = new Query("Greeting", guestbookKey).addSort("date", Query.SortDirection.DESCENDING);
-    List<Entity> greetings = datastore.prepare(query).asList(FetchOptions.Builder.withLimit(5));
+//    // Run an ancestor query to ensure we see the most up-to-date
+//    // view of the Greetings belonging to the selected Guestbook.
+//    Query query = new Query("Greeting", guestbookKey).addSort("date", Query.SortDirection.DESCENDING);
+	Query query = new Query("Greeting", guestbookKey).setKeysOnly().addSort("date", Query.SortDirection.DESCENDING);
+	List<Entity> greetingsForKeyOnly = datastore.prepare(query).asList(FetchOptions.Builder.withLimit(5));
+	datastore.prepare(query);
+	
+	List<Key> keys = new ArrayList<Key>();
+	for (Entity entity : greetingsForKeyOnly) {
+		keys.add(entity.getKey());
+	}
+	Map<Key, Object> memcacheAll = memcacheService.getAll(keys);
+	for (Entry<Key, Object> obj : memcacheAll.entrySet()) {
+		Entity entity = (Entity) obj.getValue();
+		System.out.println(entity.getProperty("content"));
+	}
+	List<Key> lackKeys = new ArrayList<Key>();
+	for (Key key : keys) {
+		if (memcacheAll.containsKey(key) == false) {
+			lackKeys.add(key);
+		}
+	}
+	Map<Key, Entity> datastoreAll = datastore.get(lackKeys);
+	memcacheService.putAll(datastoreAll);
+	
+	List<Entity> greetings = new ArrayList<Entity>();
+	for (Key key : keys) {
+		if (memcacheAll.containsKey(key)) {
+			greetings.add((Entity) memcacheAll.get(key));
+		} else if (datastoreAll.containsKey(key)) {
+			greetings.add(datastoreAll.get(key));
+		}
+	}
+	System.out.println("memcache size = " + memcacheAll.size());
+	System.out.println("datastore size = " + datastoreAll.size());
+	System.out.println("all size = " + greetings.size());
+
     if (greetings.isEmpty()) {
 %>
 <p>Guestbook '${fn:escapeXml(guestbookName)}' has no messages.</p>
